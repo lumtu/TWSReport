@@ -1,6 +1,7 @@
 # lumtu 
 */config.json
 *.xml
+*.csv
 
 
 # Byte-compiled / optimized / DLL files
