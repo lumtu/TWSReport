@@ -78,6 +78,58 @@ for stmt in report.FlexStatements:
         # cr.fromCurrency, cr.toCurrency, cr.rate sind Felder
         conversion[(cr.fromCurrency, cr.toCurrency)] = cr.rate
 
+
+    option_premien = defaultdict(list)
+
+    for trade in stmt.Trades:
+        if trade.assetCategory.value == "OPT" and trade.transactionType.value == "ExchTrade":
+            if trade.openCloseIndicator == "O" and trade.buySell == "SELL":
+                key = (trade.symbol, getattr(trade, "strike", None), getattr(trade, "expirationDate", None))
+                option_premien[key].append({
+                    "tradeDate": trade.tradeDate,
+                    "symbol": trade.symbol,
+                    "prämie": trade.proceeds,  # proceeds ist negativ bei SELL → Gewinn
+                    "währung": trade.currency,
+                    "exchange_rate": conversion.get((trade.currency, "EUR"), Decimal("1")),
+                })
+
+    for trade in stmt.Trades:
+        if trade.assetCategory.value == "STK" and trade.transactionType.value == "BookTrade":
+            key = (trade.symbol, None, None)  # Vereinfachung, ggf. mit mehr Detail
+
+            # Versuche passende Option zu finden
+            mögliche_optionen = option_premien.get(key, [])
+
+            if mögliche_optionen:
+                opt = mögliche_optionen.pop(0)  # Erste passende nehmen
+                prämie = -opt["prämie"]  # Proceeds ist negativ bei SELL
+                prämie_eur = prämie * opt["exchange_rate"]
+            else:
+                prämie = Decimal("0")
+                prämie_eur = Decimal("0")
+
+            # Jetzt echten Gewinn der Aktie berechnen
+            pnl_aktie = None
+            if hasattr(trade, "fifoPnlRealized") and trade.fifoPnlRealized is not None:
+                pnl_aktie = trade.fifoPnlRealized
+            else:
+                pnl_aktie = trade.realizedPnl or Decimal("0")
+
+            # pnl_aktie = trade.realizedPnl or Decimal("0")
+            kurs = conversion.get((trade.currency, "EUR"), Decimal("1"))
+            pnl_aktie_eur = pnl_aktie * kurs
+
+            # → Jetzt trennen
+            ergebnisse.append({
+                "tradeDate": trade.tradeDate,
+                "symbol": trade.symbol,
+                "typ": "STOCK_ASSIGNMENT",
+                "pnl_aktie_eur": pnl_aktie_eur,
+                "prämie_eur": prämie_eur,
+                "gesamt": pnl_aktie_eur + prämie_eur,
+            })
+
+
     for trade in stmt.Trades:
         # Originalwährung und PnL
         währung = trade.currency  # z. B. "USD"
@@ -99,6 +151,7 @@ for stmt in report.FlexStatements:
         else:
             pnl_eur = pnl * Decimal(str(kurs))
 
+        '''
         # Sammle Daten
         ergebnisse.append({
             "tradeDate": trade.tradeDate,
@@ -109,6 +162,7 @@ for stmt in report.FlexStatements:
             "exchange_rate": kurs,
             "pnl_eur": pnl_eur
         })
+        '''
 
         # trade.tradeDate ist ein datetime.date
         jahr = trade.tradeDate.year  # z. B. 2025
@@ -136,11 +190,33 @@ for stmt in report.FlexStatements:
 
 
 # Ausgabe
+
+'''
 for r in ergebnisse:
     print(
         f"{r['tradeDate']}: {r['symbol']} ({r['assetCategory']}) — "
         f"{r['pnl_original']} {r['currency']} @ {r['exchange_rate']} = {r['pnl_eur']} EUR"
     )
+'''
+
+# Ausgabe der Ergebnisse mit Trennung von Prämie und Aktiengewinn
+print("\nDetailausgabe je Trade:")
+for r in ergebnisse:
+    if r.get("typ") == "STOCK_ASSIGNMENT":
+        print(
+            f"{r['tradeDate']}: {r['symbol']} "
+            f"\n  Aktiengewinn:   {r['pnl_aktie_eur']:.2f} EUR"
+            f"\n  Optionsprämie:  {r['prämie_eur']:.2f} EUR"
+            f"\n  Gesamtgewinn:   {r['gesamt']:.2f} EUR"
+            "\n" + "-" * 40
+        )
+    else:
+        # Fallback: normale Anzeige (z. B. Optionsverkauf etc.)
+        print(
+            f"{r['tradeDate']}: {r['symbol']} ({r.get('assetCategory', 'UNBEKANNT')}) — "
+            f"{r.get('pnl_original', '???')} {r.get('currency', '')} "
+            f"@ {r.get('exchange_rate', '???')} = {r.get('pnl_eur', '???')} EUR"
+        )
 
 
 # Ausgabe (Konsole)
@@ -158,17 +234,17 @@ for jahr in sorted(summe.keys()):
 
 
 # Optional: CSV
-with open("trades_eur.csv", "w", newline="") as f:
-    writer = csv.writer(f)
-    writer.writerow([
-        "tradeDate", "symbol", "assetCategory",
-        "pnl_original", "currency", "exchange_rate", "pnl_eur"
-    ])
-    for r in ergebnisse:
-        writer.writerow([
-            r["tradeDate"], r["symbol"], r["assetCategory"],
-            str(r["pnl_original"]), r["currency"], str(r["exchange_rate"]), str(r["pnl_eur"])
-        ])
+# with open("trades_eur.csv", "w", newline="") as f:
+#     writer = csv.writer(f)
+#     writer.writerow([
+#         "tradeDate", "symbol", "assetCategory",
+#         "pnl_original", "currency", "exchange_rate", "pnl_eur"
+#     ])
+#     for r in ergebnisse:
+#         writer.writerow([
+#             r["tradeDate"], r["symbol"], r["assetCategory"],
+#             str(r["pnl_original"]), r["currency"], str(r["exchange_rate"]), str(r["pnl_eur"])
+#         ])
 
 
 
