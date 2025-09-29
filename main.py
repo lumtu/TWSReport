@@ -1,10 +1,29 @@
-from collections import defaultdict
-import csv
-from decimal import Decimal
 import os
 import json
+import ibflex.Types as types
+import csv
+
+from dataclasses import field
+from collections import defaultdict
+from decimal import Decimal
 from datetime import datetime, timedelta
 from ibflex import client, parser
+from ibflex.Types import Order as OriginalOrder
+from ibflex_patch import create_extended_order_class
+
+# Neue Klasse erzeugen
+Order = create_extended_order_class(OriginalOrder, {
+    'tradePrice': Decimal,
+    'ibCommission': Decimal,
+    'closePrice': Decimal,
+    'fifoPnlRealized': Decimal,
+    'capitalGainsPnl': Decimal,
+    'fxPnl': Decimal,
+    'transactionID': str,
+})
+
+# Override der Klasse im Parser, sodass er unsere verwendet
+types.Order = Order
 
 # Pfad zur Konfigurationsdatei
 CONFIG_PATH = "./config/config.json"
@@ -50,7 +69,6 @@ report = parser.parse(response)
 
 # Ergebnisse mit Umrechnung
 ergebnisse = []  # Liste von Diktaten je Trade
-# Ergebnisse: dict: Jahr -> Kategorie -> {"gewinne": Decimal, "verluste": Decimal}
 summe = defaultdict(lambda: defaultdict(lambda: {"gewinne": Decimal("0"), "verluste": Decimal("0") }))
 
 for stmt in report.FlexStatements:
@@ -95,12 +113,21 @@ for stmt in report.FlexStatements:
         # trade.tradeDate ist ein datetime.date
         jahr = trade.tradeDate.year  # z. B. 2025
         
-        # trade.assetCategory ist z. B. AssetClass.STOCK, AssetClass.OPT etc.
-        kategorie = trade.assetCategory.name  # z. B. "STOCK", "OPT"
         
         # realisierte PNL
         realisiert = pnl_eur or Decimal("0")
         
+        # trade.assetCategory ist z. B. AssetClass.STOCK, AssetClass.OPT etc.
+        kategorie = trade.assetCategory.name.upper()  # z. B. "STOCK", "OPT"
+
+        # Prüfe auf angediente Aktien (PUT) oder ausgebuchte (CALL)
+        if trade.assetCategory.value == "STK" and trade.transactionType.value.upper() == "BOOKTRADE":
+            kategorie = "STOCK_ASSIGNED"  # oder z. B. "ASSIGNMENT"
+
+        # Alternativ auch OPT erkennen, wenn du Optionsdaten einliest
+        elif trade.assetCategory.value == "OPT" and trade.transactionType.value.upper() == "BOOKTRADE":
+            kategorie = "OPTION_ASSIGNED"
+
         if realisiert >= 0:
             summe[jahr][kategorie]["gewinne"] += realisiert
         else:
